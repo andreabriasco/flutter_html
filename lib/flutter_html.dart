@@ -8,6 +8,7 @@ import 'package:html/dom.dart' as dom;
 
 //export render context api
 export 'package:flutter_html/src/html_parser.dart';
+export 'package:flutter_html/src/html_text_measurer.dart';
 //export src for advanced custom render uses (e.g. casting context.tree)
 export 'package:flutter_html/src/anchor.dart';
 export 'package:flutter_html/src/tree/image_element.dart';

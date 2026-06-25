@@ -9,12 +9,7 @@ import 'package:flutter_html/src/builtins/ruby_builtin.dart';
 import 'package:flutter_html/src/builtins/styled_element_builtin.dart';
 import 'package:flutter_html/src/builtins/text_builtin.dart';
 import 'package:flutter_html/src/builtins/vertical_align_builtin.dart';
-import 'package:flutter_html/src/css_parser.dart';
-import 'package:flutter_html/src/processing/befores_afters.dart';
-import 'package:flutter_html/src/processing/lists.dart';
-import 'package:flutter_html/src/processing/margins.dart';
-import 'package:flutter_html/src/processing/relative_sizes.dart';
-import 'package:flutter_html/src/processing/whitespace.dart';
+import 'package:flutter_html/src/html_processing_pipeline.dart';
 import 'package:html/dom.dart' as html;
 import 'package:html/parser.dart' as html_parser;
 
@@ -153,21 +148,11 @@ class _HtmlParserState extends State<HtmlParser> {
 
   @override
   void didChangeDependencies() {
-    prepareTree();
+    tree = HtmlProcessingPipeline(
+      parser: widget,
+      buildContext: context,
+    ).prepareTree();
     super.didChangeDependencies();
-  }
-
-  void prepareTree() {
-    // Preparing Step
-    prepareHtmlTree();
-
-    // Styling Step
-    beforeStyleTree(tree);
-    styleTree();
-
-    // Processing Step
-    beforeProcessTree(tree);
-    processTree();
   }
 
   /// As the widget [build]s, the HTML data is processed into a tree of [StyledElement]s,
@@ -192,21 +177,6 @@ class _HtmlParserState extends State<HtmlParser> {
     super.dispose();
   }
 
-  /// Converts the tree of Html nodes into a simplified StyledElement tree
-  void prepareHtmlTree() {
-    tree = StyledElement(
-      name: '[Tree Root]',
-      children: [],
-      node: widget.htmlData,
-      style: Style.fromTextStyle(DefaultTextStyle.of(context)
-          .style), //TODO this was Theme.of(context).textTheme.bodyText2!. Compare.
-    );
-
-    for (var node in widget.htmlData.nodes) {
-      tree.children.add(_prepareHtmlTreeRecursive(node));
-    }
-  }
-
   bool _isTagRestricted(ExtensionContext context) {
     // Block the tag from rendering if it is restricted.
     if (context.node is! html.Element) {
@@ -224,152 +194,6 @@ class _HtmlParserState extends State<HtmlParser> {
     }
 
     return false;
-  }
-
-  /// Recursive helper method for [lexHtmlTree].
-  StyledElement _prepareHtmlTreeRecursive(html.Node node) {
-    // Set the extension context for this node.
-    final extensionContext = ExtensionContext(
-      parser: widget,
-      buildContext: context,
-      node: node,
-      currentStep: CurrentStep.preparing,
-    );
-
-    // Block the tag from rendering if it is restricted.
-    if (_isTagRestricted(extensionContext)) {
-      return EmptyContentElement(node: node);
-    }
-
-    // Lex this element's children
-    final children = node.nodes.map(_prepareHtmlTreeRecursive).toList();
-
-    // Prepare the element from one of the extensions
-    return widget.prepareFromExtension(extensionContext, children);
-  }
-
-  /// Called before any styling is cascaded on the tree
-  void beforeStyleTree(StyledElement tree) {
-    final extensionContext = ExtensionContext(
-      node: tree.node,
-      parser: widget,
-      styledElement: tree,
-      buildContext: context,
-      currentStep: CurrentStep.preStyling,
-    );
-
-    // Prevent restricted tags from getting sent to extensions.
-    if (_isTagRestricted(extensionContext)) {
-      return;
-    }
-
-    // Loop through every extension and see if it wants to process this element
-    for (final extension in widget.extensions) {
-      if (extension.matches(extensionContext)) {
-        extension.beforeStyle(extensionContext);
-      }
-    }
-
-    // Loop through built in elements and see if they want to process this element.
-    for (final builtIn in HtmlParser.builtIns) {
-      if (builtIn.matches(extensionContext)) {
-        builtIn.beforeStyle(extensionContext);
-      }
-    }
-
-    // Do the same recursively
-    tree.children.forEach(beforeStyleTree);
-  }
-
-  /// [styleTree] takes the lexed [StyleElement] tree and applies external,
-  /// inline, and custom CSS/Flutter styles, and then cascades the styles down the tree.
-  void styleTree() {
-    final styleTagContents = widget.htmlData
-        .getElementsByTagName("style")
-        .map((e) => e.innerHtml)
-        .join();
-    final styleTagDeclarations =
-        parseExternalCss(styleTagContents, widget.onCssParseError);
-
-    _styleTreeRecursive(tree, styleTagDeclarations);
-  }
-
-  /// Recursive helper method for [styleTree].
-  void _styleTreeRecursive(StyledElement tree, styleTagDeclarations) {
-    // Apply external CSS
-    styleTagDeclarations.forEach((selector, style) {
-      if (tree.matchesSelector(selector)) {
-        tree.style = tree.style.merge(declarationsToStyle(style));
-      }
-    });
-
-    // Apply inline styles
-    if (tree.attributes.containsKey("style")) {
-      final newStyle =
-          inlineCssToStyle(tree.attributes['style'], widget.onCssParseError);
-      if (newStyle != null) {
-        tree.style = tree.style.merge(newStyle);
-      }
-    }
-
-    // Apply custom styles
-    widget.style.forEach((selector, style) {
-      if (tree.matchesSelector(selector)) {
-        tree.style = tree.style.merge(style);
-      }
-    });
-
-    // Cascade applicable styles down the tree. Recurse for all children
-    for (final child in tree.children) {
-      child.style = tree.style.copyOnlyInherited(child.style);
-      _styleTreeRecursive(child, styleTagDeclarations);
-    }
-  }
-
-  /// Called before any processing is done on the tree
-  void beforeProcessTree(StyledElement tree) {
-    final extensionContext = ExtensionContext(
-      node: tree.node,
-      parser: widget,
-      styledElement: tree,
-      buildContext: context,
-      currentStep: CurrentStep.preProcessing,
-    );
-
-    // Prevent restricted tags from getting sent to extensions
-    if (_isTagRestricted(extensionContext)) {
-      return;
-    }
-
-    // Loop through every extension and see if it can process this element
-    for (final extension in widget.extensions) {
-      if (extension.matches(extensionContext)) {
-        extension.beforeProcessing(extensionContext);
-      }
-    }
-
-    // Loop through built in elements and see if they can process this element.
-    for (final builtIn in HtmlParser.builtIns) {
-      if (builtIn.matches(extensionContext)) {
-        builtIn.beforeProcessing(extensionContext);
-      }
-    }
-
-    // Do the same recursively
-    tree.children.forEach(beforeProcessTree);
-  }
-
-  /// [processTree] takes the now-styled [StyleElement] tree and does some final
-  /// processing steps: removing unnecessary whitespace and empty elements,
-  /// calculating relative values, processing list markers and counters,
-  /// processing `before`/`after` generated elements, and collapsing margins
-  /// according to CSS rules.
-  void processTree() {
-    tree = WhitespaceProcessing.processWhitespace(tree);
-    tree = RelativeSizesProcessing.processRelativeValues(tree);
-    tree = ListProcessing.processLists(tree);
-    tree = BeforesAftersProcessing.processBeforesAfters(tree);
-    tree = MarginProcessing.processMargins(tree);
   }
 
   /// [buildTree] converts a tree of [StyledElement]s to an [InlineSpan] tree.
